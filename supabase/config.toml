@@ -1,0 +1,73 @@
+project_id = "boarmomqaeqlcltqmxmo"
+
+[functions.voice-assistant]
+verify_jwt = false
+
+[functions.send-bill-notification]
+verify_jwt = false
+
+[functions.send-inventory-alert]
+verify_jwt = false
+
+[functions.payu-payment]
+verify_jwt = false
+
+[functions.daily-inventory-report]
+verify_jwt = false
+
+[functions.create-admin-user]
+verify_jwt = false
+
+[functions.razorpay-payment]
+verify_jwt = false
+
+[functions.price-override-alert]
+verify_jwt = false
+
+[functions.inventory-sync]
+verify_jwt = false
+
+[functions.storefront-checkout]
+verify_jwt = false
+
+[functions.send-order-notification]
+verify_jwt = false
+
+[functions.track-order]
+verify_jwt = false
+
+[functions.ai-product-search]
+verify_jwt = false
+
+[functions.ai-customer-support]
+verify_jwt = false
+
+[functions.ai-inventory-recommendations]
+verify_jwt = false
+
+[functions.ai-product-assistant]
+verify_jwt = false
+
+[functions.marketplace-inventory-sync]
+verify_jwt = false
+
+[functions.barcode-product-lookup]
+verify_jwt = false
+
+[functions.delhivery-shipping-rates]
+verify_jwt = false
+
+[functions.daily-upi-summary]
+verify_jwt = false
+
+[functions.upi-payment-alert]
+verify_jwt = false
+
+[functions.upi-verification-status]
+verify_jwt = false
+
+[functions.upi-payment-receipt]
+verify_jwt = false
+
+[functions.whatsapp-upi-alert]
+verify_jwt = false
