@@ -4,270 +4,134 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
+
+type Marketplace = 'meesho' | 'amazon' | 'flipkart';
+type Action = 'sync_stock' | 'update_price' | 'get_status';
 
 interface MarketplaceSyncRequest {
   productId?: string;
-  marketplace: 'meesho' | 'amazon' | 'flipkart' | 'all';
-  action: 'sync_stock' | 'update_price' | 'get_status';
-  data?: {
-    quantity?: number;
-    price?: number;
-    sku?: string;
-  };
+  marketplace: Marketplace | 'all';
+  action: Action;
+  data?: { quantity?: number; price?: number; sku?: string };
 }
 
-interface MarketplaceConfig {
-  name: string;
-  apiEndpoint: string;
-  requiresAuth: boolean;
-  stockUpdateEndpoint: string;
-  priceUpdateEndpoint: string;
+async function requireStaff(req: Request, supabaseUrl: string, anonKey: string, serviceKey: string) {
+  const authHeader = req.headers.get('Authorization');
+  if (!authHeader) throw new Error('Authentication required');
+  const userClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
+  const { data: { user }, error } = await userClient.auth.getUser();
+  if (error || !user) throw new Error('Invalid authentication');
+  const service = createClient(supabaseUrl, serviceKey);
+  const { data: role } = await service.from('user_roles').select('role').eq('user_id', user.id).in('role', ['admin', 'manager']).maybeSingle();
+  if (!role) throw new Error('Admin or manager privileges required');
+  return { user, service };
 }
 
-const MARKETPLACE_CONFIGS: Record<string, MarketplaceConfig> = {
-  meesho: {
-    name: 'Meesho',
-    apiEndpoint: 'https://api.meesho.com/v1/seller',
-    requiresAuth: true,
-    stockUpdateEndpoint: '/inventory/update',
-    priceUpdateEndpoint: '/price/update',
-  },
-  amazon: {
-    name: 'Amazon',
-    apiEndpoint: 'https://sellercentral.amazon.in/api',
-    requiresAuth: true,
-    stockUpdateEndpoint: '/inventory',
-    priceUpdateEndpoint: '/pricing',
-  },
-  flipkart: {
-    name: 'Flipkart',
-    apiEndpoint: 'https://api.flipkart.net/sellers/v3',
-    requiresAuth: true,
-    stockUpdateEndpoint: '/inventory',
-    priceUpdateEndpoint: '/listings/price',
-  },
-};
+async function decryptCredentials(ciphertext: string, secret: string) {
+  const [iv64, cipher64] = ciphertext.split('.');
+  if (!iv64 || !cipher64) throw new Error('Invalid credential ciphertext');
+  const raw = (v: string) => Uint8Array.from(atob(v), c => c.charCodeAt(0));
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret));
+  const key = await crypto.subtle.importKey('raw', digest, { name: 'AES-GCM' }, false, ['decrypt']);
+  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: raw(iv64) }, key, raw(cipher64));
+  return JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown>;
+}
+
+function response(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...corsHeaders } });
+}
+
+async function loadCredentials(service: ReturnType<typeof createClient>, environment: string, secret: string) {
+  const { data, error } = await service.from('integration_credentials')
+    .select('provider,credentials_ciphertext,enabled')
+    .in('provider', ['meesho', 'amazon', 'flipkart'])
+    .eq('environment', environment);
+  if (error) throw error;
+  const result: Record<string, Record<string, unknown>> = {};
+  for (const row of data || []) {
+    if (row.enabled && row.credentials_ciphertext) result[row.provider] = await decryptCredentials(row.credentials_ciphertext, secret);
+  }
+  return result;
+}
+
+/**
+ * This function deliberately does not fake marketplace success.
+ * Amazon LWA credentials can be validated here, but stock/price writes require
+ * the seller's approved SP-API roles and a complete SP-API signing/connector setup.
+ * Flipkart and Meesho require their current seller-specific API contracts.
+ */
+async function testAmazonLwa(credentials: Record<string, unknown>) {
+  const refreshToken = String(credentials.refreshToken || '');
+  const clientId = String(credentials.clientId || '');
+  const clientSecret = String(credentials.clientSecret || '');
+  if (!refreshToken || !clientId || !clientSecret) throw new Error('Amazon LWA client ID, client secret and refresh token are required');
+  const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: clientId, client_secret: clientSecret });
+  const r = await fetch('https://api.amazon.com/auth/o2/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded;charset=UTF-8' }, body });
+  const payload = await r.json().catch(() => ({}));
+  if (!r.ok || !payload.access_token) throw new Error(`Amazon LWA rejected the credentials (HTTP ${r.status}).`);
+  return { success: true, message: 'Amazon LWA credentials verified. SP-API listing/inventory permissions still need a real seller-authorized API call.' };
+}
 
 const handler = async (req: Request): Promise<Response> => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
-
+  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
   try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    const encryptionSecret = Deno.env.get('INTEGRATION_CREDENTIALS_ENCRYPTION_KEY') ?? '';
+    if (!encryptionSecret) return response({ success: false, error: 'INTEGRATION_CREDENTIALS_ENCRYPTION_KEY is not configured.' }, 500);
 
-    const { productId, marketplace, action, data }: MarketplaceSyncRequest = await req.json();
+    const { service } = await requireStaff(req, supabaseUrl, anonKey, serviceKey);
+    const body = await req.json() as MarketplaceSyncRequest;
+    if (!body.marketplace || !body.action) return response({ success: false, error: 'marketplace and action are required' }, 400);
 
-    console.log(`Marketplace sync request: ${action} for ${marketplace}`, { productId, data });
-
-    // Marketplace credentials are now stored encrypted by Admin → Settings → Integrations.
-    const encryptionSecret = Deno.env.get('INTEGRATION_CREDENTIALS_ENCRYPTION_KEY');
     const environment = Deno.env.get('MARKETPLACE_ENVIRONMENT') === 'live' ? 'live' : 'test';
-    const credentialRows = await supabase.from('integration_credentials')
-      .select('provider, credentials_ciphertext, enabled')
-      .in('provider', ['meesho','amazon','flipkart'])
-      .eq('environment', environment);
+    const credentials = await loadCredentials(service, environment, encryptionSecret);
+    const marketplaces: Marketplace[] = body.marketplace === 'all' ? ['meesho', 'amazon', 'flipkart'] : [body.marketplace];
 
-    const credentialsMap: Record<string, any> = {};
-    for (const row of credentialRows.data || []) {
-      if (!row.enabled || !row.credentials_ciphertext || !encryptionSecret) continue;
-      try {
-        const [iv64, cipher64] = row.credentials_ciphertext.split('.');
-        const ivRaw = atob(iv64); const cipherRaw = atob(cipher64);
-        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(encryptionSecret));
-        const key = await crypto.subtle.importKey('raw', digest, { name:'AES-GCM' }, false, ['decrypt']);
-        const decrypted = await crypto.subtle.decrypt({ name:'AES-GCM', iv:Uint8Array.from(ivRaw,c=>c.charCodeAt(0)) }, key, Uint8Array.from(cipherRaw,c=>c.charCodeAt(0)));
-        credentialsMap[row.provider] = JSON.parse(new TextDecoder().decode(decrypted));
-      } catch (e) { console.error(`Unable to decrypt ${row.provider} credentials`, e); }
+    if (body.action === 'get_status') {
+      const results = [];
+      for (const mp of marketplaces) {
+        if (!credentials[mp]) results.push({ marketplace: mp, success: false, error: `${mp} is not configured in Admin → Settings → Integrations.` });
+        else if (mp === 'amazon') results.push({ marketplace: mp, ...(await testAmazonLwa(credentials[mp])) });
+        else results.push({ marketplace: mp, success: false, error: `${mp} credentials are stored, but its current seller API contract has not been supplied/configured. The system will not report a fake sync.` });
+      }
+      const failed = results.filter(r => !r.success).length;
+      return response({ success: failed === 0, summary: { total: results.length, successful: results.length - failed, failed }, results });
     }
 
-    let products: any[] = [];
-    
-    if (productId) {
-      const { data: product, error } = await supabase
-        .from('products')
-        .select('*, product_variants(*)')
-        .eq('id', productId)
-        .single();
-      
-      if (error || !product) {
-        return new Response(
-          JSON.stringify({ success: false, error: 'Product not found' }),
-          { status: 404, headers: { "Content-Type": "application/json", ...corsHeaders } }
-        );
-      }
-      products = [product];
-    } else {
-      // Get all products for bulk sync
-      const { data: allProducts } = await supabase
-        .from('products')
-        .select('*, product_variants(*)')
-        .order('updated_at', { ascending: false });
-      products = allProducts || [];
-    }
+    // Product/price/stock writes are intentionally blocked until a real connector is available.
+    // This prevents the previous implementation from falsely reporting inventory updates.
+    const productsQuery = body.productId
+      ? service.from('products').select('id,name,sku,quantity,price,mrp,product_variants(*)').eq('id', body.productId).single()
+      : service.from('products').select('id,name,sku,quantity,price,mrp,product_variants(*)').order('updated_at', { ascending: false });
+    const { data: products, error: productsError } = body.productId ? await productsQuery : await productsQuery;
+    if (productsError) return response({ success: false, error: productsError.message }, 400);
+    const list = body.productId ? [products] : (products || []);
 
-    const results: any[] = [];
-    const marketplacesToSync = marketplace === 'all' 
-      ? ['meesho', 'amazon', 'flipkart'] 
-      : [marketplace];
+    const results = marketplaces.flatMap(mp => list.map((product: any) => ({
+      marketplace: mp,
+      productId: product.id,
+      productName: product.name,
+      sku: product.sku,
+      success: false,
+      error: mp === 'amazon'
+        ? 'Amazon credentials can be tested, but inventory/price writes require the approved SP-API connector and seller authorization. No write was attempted.'
+        : `${mp} inventory/price connector is not configured. No write was attempted.`,
+    })));
 
-    for (const mp of marketplacesToSync) {
-      const config = MARKETPLACE_CONFIGS[mp];
-      const apiKey = credentialsMap[mp]?.apiKey || credentialsMap[mp]?.applicationSecret || credentialsMap[mp]?.refreshToken;
-
-      if (!apiKey) {
-        results.push({
-          marketplace: mp,
-          success: false,
-          error: `API key not configured for ${config.name}`,
-        });
-        continue;
-      }
-
-      for (const product of products) {
-        try {
-          let syncResult;
-
-          switch (action) {
-            case 'sync_stock':
-              // Calculate total stock including variants
-              const totalStock = product.product_variants?.length > 0
-                ? product.product_variants.reduce((sum: number, v: any) => sum + (v.quantity || 0), 0)
-                : product.quantity;
-
-              syncResult = await simulateMarketplaceApiCall(mp, config, apiKey, {
-                action: 'stock_update',
-                sku: product.sku,
-                style_id: product.style_id,
-                quantity: data?.quantity ?? totalStock,
-                variants: product.product_variants?.map((v: any) => ({
-                  sku: v.sku,
-                  quantity: v.quantity,
-                  size: v.variation,
-                  color: v.color,
-                })),
-              });
-              break;
-
-            case 'update_price':
-              syncResult = await simulateMarketplaceApiCall(mp, config, apiKey, {
-                action: 'price_update',
-                sku: product.sku,
-                price: data?.price ?? product.price,
-                mrp: product.mrp,
-                variants: product.product_variants?.map((v: any) => ({
-                  sku: v.sku,
-                  price: v.meesho_price || v.price,
-                  mrp: v.mrp,
-                })),
-              });
-              break;
-
-            case 'get_status':
-              syncResult = await simulateMarketplaceApiCall(mp, config, apiKey, {
-                action: 'get_status',
-                sku: product.sku,
-              });
-              break;
-
-            default:
-              syncResult = { success: false, error: 'Unknown action' };
-          }
-
-          results.push({
-            marketplace: mp,
-            productId: product.id,
-            productName: product.name,
-            sku: product.sku,
-            ...syncResult,
-          });
-
-          // Log sync activity
-          await supabase.from('app_settings').upsert({
-            key: `last_${mp}_sync`,
-            value: {
-              timestamp: new Date().toISOString(),
-              productCount: products.length,
-              action,
-            },
-          }, { onConflict: 'key' });
-
-        } catch (error: any) {
-          console.error(`Error syncing product ${product.id} to ${mp}:`, error);
-          results.push({
-            marketplace: mp,
-            productId: product.id,
-            productName: product.name,
-            success: false,
-            error: error.message,
-          });
-        }
-      }
-    }
-
-    const successCount = results.filter(r => r.success).length;
-    const failCount = results.filter(r => !r.success).length;
-
-    return new Response(
-      JSON.stringify({
-        success: failCount === 0,
-        summary: {
-          total: results.length,
-          successful: successCount,
-          failed: failCount,
-        },
-        results,
-      }),
-      { headers: { "Content-Type": "application/json", ...corsHeaders } }
-    );
-
-  } catch (error: any) {
-    console.error("Error in marketplace-inventory-sync:", error);
-    return new Response(
-      JSON.stringify({ success: false, error: error.message }),
-      { status: 500, headers: { "Content-Type": "application/json", ...corsHeaders } }
-    );
+    return response({
+      success: false,
+      summary: { total: results.length, successful: 0, failed: results.length },
+      results,
+      message: 'No marketplace write was simulated. Configure the approved marketplace connector before enabling live synchronization.',
+    }, 409);
+  } catch (error) {
+    console.error('Marketplace sync error:', error);
+    return response({ success: false, error: error instanceof Error ? error.message : 'Unexpected error' }, 400);
   }
 };
-
-// Simulates marketplace API calls - in production, replace with real API integrations
-async function simulateMarketplaceApiCall(
-  marketplace: string,
-  config: MarketplaceConfig,
-  apiKey: string,
-  payload: any
-): Promise<{ success: boolean; message?: string; error?: string; data?: any }> {
-  console.log(`[${marketplace}] API call simulation:`, payload);
-
-  // Simulate API latency
-  await new Promise(resolve => setTimeout(resolve, 100));
-
-  // In production, this would make actual HTTP calls to marketplace APIs
-  // Example for Meesho:
-  // const response = await fetch(`${config.apiEndpoint}${config.stockUpdateEndpoint}`, {
-  //   method: 'POST',
-  //   headers: {
-  //     'Authorization': `Bearer ${apiKey}`,
-  //     'Content-Type': 'application/json',
-  //   },
-  //   body: JSON.stringify(payload),
-  // });
-
-  // For now, return simulated success
-  return {
-    success: true,
-    message: `${payload.action} completed successfully for ${marketplace}`,
-    data: {
-      marketplace,
-      sku: payload.sku,
-      timestamp: new Date().toISOString(),
-      action: payload.action,
-      details: payload,
-    },
-  };
-}
 
 serve(handler);

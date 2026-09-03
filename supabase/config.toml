@@ -71,3 +71,6 @@ verify_jwt = false
 
 [functions.whatsapp-upi-alert]
 verify_jwt = false
+
+[functions.integration-credentials]
+verify_jwt = false

@@ -41,7 +41,9 @@ The frontend only receives connection status and masked metadata after credentia
 
 ## Live marketplace setup
 
-The UI supports credential storage for Amazon, Flipkart, Meesho, Razorpay, PayU and a generic shipping provider. Live listing/order APIs still require the seller/provider's approved credentials and endpoint-specific implementation. Never treat a stored credential as proof that a marketplace listing API is live until a real connection test and test listing/order have succeeded.
+The UI supports secure credential storage for Amazon, Flipkart, Meesho, Razorpay, PayU and shipping. Amazon LWA credentials can be tested from Admin → Settings → Integrations. Marketplace write operations intentionally fail closed until the approved provider-specific connector is configured; the system never reports a simulated inventory/price success.
+
+Amazon India uses the EU SP-API endpoint and requires seller authorization plus the appropriate SP-API roles. Flipkart and Meesho require their current seller API contract/base URL and authentication scheme. These provider requirements cannot be inferred from an API key alone.
 
 ## Required go-live checks
 

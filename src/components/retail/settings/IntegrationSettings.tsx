@@ -20,13 +20,13 @@ const PROVIDERS: { id: Provider; name: string; description: string; fields: { ke
     { key:'merchantKey', label:'Merchant Key' }, { key:'merchantSalt', label:'Merchant Salt', secret:true }
   ]},
   { id:'meesho', name:'Meesho', description:'Seller account credentials for marketplace integration.', fields:[
-    { key:'apiKey', label:'API / Integration Key', secret:true }, { key:'sellerId', label:'Seller ID' }
+    { key:'apiKey', label:'API / Integration Key', secret:true }, { key:'sellerId', label:'Seller ID' }, { key:'apiBaseUrl', label:'Approved API Base URL', placeholder:'https://…' }
   ]},
   { id:'flipkart', name:'Flipkart', description:'Seller API credentials.', fields:[
-    { key:'applicationId', label:'Application ID' }, { key:'applicationSecret', label:'Application Secret', secret:true }
+    { key:'applicationId', label:'Application ID' }, { key:'applicationSecret', label:'Application Secret', secret:true }, { key:'sellerId', label:'Seller ID' }, { key:'apiBaseUrl', label:'Approved API Base URL', placeholder:'https://…' }
   ]},
   { id:'amazon', name:'Amazon', description:'Amazon Selling Partner API connection.', fields:[
-    { key:'refreshToken', label:'LWA Refresh Token', secret:true }, { key:'clientId', label:'LWA Client ID' }, { key:'clientSecret', label:'LWA Client Secret', secret:true }, { key:'sellerId', label:'Seller ID' }
+    { key:'refreshToken', label:'LWA Refresh Token', secret:true }, { key:'clientId', label:'LWA Client ID' }, { key:'clientSecret', label:'LWA Client Secret', secret:true }, { key:'sellerId', label:'Seller ID' }, { key:'marketplaceId', label:'Amazon India Marketplace ID', placeholder:'A21TJRUUN4KGV' }, { key:'productType', label:'Default Amazon Product Type', placeholder:'SHIRT' }
   ]},
   { id:'shipping', name:'Shipping Provider', description:'Connect your website shipping/courier provider.', fields:[
     { key:'providerName', label:'Provider Name', placeholder:'e.g. Shiprocket' }, { key:'apiKey', label:'API Key', secret:true }, { key:'apiSecret', label:'API Secret / Token', secret:true }, { key:'pickupPincode', label:'Pickup Pincode' }
@@ -125,7 +125,8 @@ export function IntegrationSettings({ onBack }: Props) {
           {selected.fields.map(field => <div key={field.key} className="space-y-2"><Label>{field.label}</Label><div className="relative"><Input type={field.secret && !show[field.key]?'password':'text'} value={values[field.key]||''} onChange={e=>setValues(v=>({...v,[field.key]:e.target.value}))} placeholder={configured && field.secret?'Leave blank to keep the saved secret':field.placeholder}/>{field.secret && <button type="button" onClick={()=>setShow(s=>({...s,[field.key]:!s[field.key]}))} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">{show[field.key]?<EyeOff className="w-4 h-4"/>:<Eye className="w-4 h-4"/>}</button>}</div></div>)}
         </div>
 
-        {provider==='amazon' && <div className="text-sm text-muted-foreground rounded-lg bg-secondary/50 p-4"><KeyRound className="w-4 h-4 inline mr-2"/>Amazon is intended to use seller authorization/OAuth credentials rather than a generic API-key field.</div>}
+        {provider==='amazon' && <div className="text-sm text-muted-foreground rounded-lg bg-secondary/50 p-4 space-y-1"><div><KeyRound className="w-4 h-4 inline mr-2"/>Amazon uses LWA/SP-API authorization, not a generic API key.</div><div>India uses the EU SP-API endpoint. A successful credential test confirms LWA only; listing/inventory writes still require the seller-authorized SP-API roles and connector configuration.</div></div>}
+        {(provider==='meesho'||provider==='flipkart') && <div className="text-sm text-muted-foreground rounded-lg bg-secondary/50 p-4"><KeyRound className="w-4 h-4 inline mr-2"/>Use the exact seller API base URL supplied by the marketplace/provider. The system will not claim a sync succeeded unless the provider-specific connector actually performs the operation.</div>}
 
         <div className="flex flex-wrap gap-3"><Button onClick={save} disabled={saving||loading}><Save className="w-4 h-4 mr-2"/>{saving?'Saving…':'Save Securely'}</Button><Button variant="outline" onClick={test} disabled={!configured||loading}><CheckCircle2 className="w-4 h-4 mr-2"/>{loading?'Testing…':'Test Connection'}</Button>{configured&&<Button variant="destructive" onClick={remove} disabled={loading}><Trash2 className="w-4 h-4 mr-2"/>Disconnect</Button>}</div>
         {loading && <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="w-4 h-4 animate-spin"/>Working securely…</div>}

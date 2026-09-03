@@ -71,3 +71,27 @@ Yes, you can!
 To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+
+## Today: local run
+
+```powershell
+npm install
+npm run build
+npm run dev
+```
+
+Open the URL printed by Vite (normally `http://localhost:5173`).
+
+## Supabase deployment
+
+Apply all migrations in `supabase/migrations` and deploy the Edge Functions. Set these server-side secrets:
+
+- `INTEGRATION_CREDENTIALS_ENCRYPTION_KEY` — long random secret
+- `MARKETPLACE_ENVIRONMENT` — `test` or `live`
+- Supabase-provided service/anon keys as required by Edge Functions
+
+Never place marketplace secrets in `VITE_*` variables.
+
+## Marketplace safety
+
+The previous marketplace implementation could return simulated success. This final candidate removes that behavior. Inventory/price writes fail closed unless a real provider connector is configured. Amazon LWA credentials can be tested; Amazon SP-API writes require the seller-authorized roles and connector/signing configuration. Flipkart and Meesho require the current seller API contract supplied by the provider.

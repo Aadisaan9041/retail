@@ -10,9 +10,13 @@
 ## Integrations
 - [ ] Razorpay Test connected
 - [ ] Razorpay Live connected after successful test
-- [ ] Amazon connected
-- [ ] Flipkart connected
-- [ ] Meesho connected
+- [ ] Amazon LWA connection test passes
+- [ ] Amazon SP-API seller authorization/roles verified
+- [ ] Amazon real test listing/inventory update verified
+- [ ] Flipkart provider API contract/base URL verified
+- [ ] Flipkart real test listing/inventory update verified
+- [ ] Meesho provider API contract/base URL verified
+- [ ] Meesho real test listing/inventory update verified
 - [ ] Shipping provider connected
 - [ ] Supabase encryption secret configured
 
